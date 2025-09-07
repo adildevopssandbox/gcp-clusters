@@ -1,0 +1,212 @@
+name: tf-multistage
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Which stage to run manually?"
+        required: true
+        type: choice
+        default: apply
+        options:
+          - apply
+          - destroy-apply
+
+permissions:
+  contents: read
+
+env:
+  PLAN_BUCKET: plan-bucket-aa
+  DESTROY_SUBPATH: destroy
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  # -------------------------------
+  # PLAN (auto on push)
+  # -------------------------------
+  plan:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install Terraform
+        run: |
+          curl -sSL -o tf.zip "https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip"
+          unzip -q tf.zip
+          sudo mv terraform /usr/local/bin/
+          terraform -version
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        # project_id is also in terraform.tfvars, but we pass it explicitly to match your sample
+        run: terraform plan -input=false -var="project_id=${{ secrets.GCP_PROJECT_ID }}" -out=plan.tfplan
+
+      - name: Checksum plan
+        run: sha256sum plan.tfplan | awk '{print $1}' > plan.tfplan.sha256
+
+      - name: Upload plan to GCS
+        run: |
+          SAFE_PREFIX="${{ github.repository }}-${{ github.sha }}"
+          gsutil cp plan.tfplan gs://${PLAN_BUCKET}/${SAFE_PREFIX}/plan.tfplan
+          gsutil cp plan.tfplan.sha256 gs://${PLAN_BUCKET}/${SAFE_PREFIX}/plan.tfplan.sha256
+
+  # -------------------------------
+  # APPLY (manual via workflow_dispatch)
+  # -------------------------------
+  apply:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    outputs:
+      safe_prefix: ${{ steps.set_prefix.outputs.safe_prefix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install Terraform
+        run: |
+          curl -sSL -o tf.zip "https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip"
+          unzip -q tf.zip
+          sudo mv terraform /usr/local/bin/
+
+      - name: Set Prefix
+        id: set_prefix
+        run: echo "safe_prefix=${{ github.repository }}-${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Download plan from GCS
+        run: |
+          SAFE_PREFIX="${{ github.repository }}-${{ github.sha }}"
+          gsutil cp gs://${PLAN_BUCKET}/${SAFE_PREFIX}/plan.tfplan ./plan.tfplan
+          gsutil cp gs://${PLAN_BUCKET}/${SAFE_PREFIX}/plan.tfplan.sha256 ./plan.tfplan.sha256
+
+      - name: Verify checksum
+        run: |
+          DOWN_HASH="$(sha256sum plan.tfplan | awk '{print $1}')"
+          EXP_HASH="$(cat plan.tfplan.sha256)"
+          if [ "$DOWN_HASH" != "$EXP_HASH" ]; then
+            echo "Checksum mismatch! expected=$EXP_HASH got=$DOWN_HASH"
+            exit 1
+          fi
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Apply
+        run: terraform apply -input=false plan.tfplan
+
+  # -------------------------------
+  # DESTROY PLAN (auto after apply)
+  # -------------------------------
+  destroy-plan:
+    runs-on: ubuntu-latest
+    needs: apply
+    if: needs.apply.result == 'success'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install Terraform
+        run: |
+          curl -sSL -o tf.zip "https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip"
+          unzip -q tf.zip
+          sudo mv terraform /usr/local/bin/
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Create Destroy Plan
+        run: terraform plan -destroy -input=false -var="project_id=${{ secrets.GCP_PROJECT_ID }}" -out=destroy.tfplan
+
+      - name: Checksum Destroy Plan
+        run: sha256sum destroy.tfplan | awk '{print $1}' > destroy.tfplan.sha256
+
+      - name: Upload Destroy Plan
+        run: |
+          SAFE_PREFIX="${{ github.repository }}-${{ github.sha }}"
+          gsutil cp destroy.tfplan gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan
+          gsutil cp destroy.tfplan.sha256 gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan.sha256
+
+  # -------------------------------
+  # DESTROY APPLY (manual via workflow_dispatch)
+  # -------------------------------
+  destroy-apply:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy-apply'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install Terraform
+        run: |
+          curl -sSL -o tf.zip "https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip"
+          unzip -q tf.zip
+          sudo mv terraform /usr/local/bin/
+
+      - name: Download Destroy Plan
+        run: |
+          SAFE_PREFIX="${{ github.repository }}-${{ github.sha }}"
+          gsutil cp gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan ./destroy.tfplan
+          gsutil cp gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan.sha256 ./destroy.tfplan.sha256
+
+      - name: Verify checksum
+        run: |
+          DOWN_HASH="$(sha256sum destroy.tfplan | awk '{print $1}')"
+          EXP_HASH="$(cat destroy.tfplan.sha256)"
+          if [ "$DOWN_HASH" != "$EXP_HASH" ]; then
+            echo "Checksum mismatch! expected=$EXP_HASH got=$DOWN_HASH"
+            exit 1
+          fi
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Destroy Apply
+        run: terraform apply -input=false destroy.tfplan
