@@ -1,0 +1,42 @@
+name: Terraform Apply (from packaged zip)
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Commit SHA to deploy"
+        required: true
+        type: string
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    env:
+      GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+      ARTIFACT_BUCKET: plan-bucket-aa
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GOOGLE_PROJECT }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Download packaged code
+        run: |
+          gsutil cp "gs://${ARTIFACT_BUCKET}/artifacts/${{ inputs.commit_sha }}/infra.zip" .
+          unzip -q infra.zip
+
+      - name: Terraform Init (uses backend.tf in zip)
+        run: terraform init -input=false -reconfigure
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -input=false
