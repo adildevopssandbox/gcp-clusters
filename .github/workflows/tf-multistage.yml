@@ -20,7 +20,6 @@ permissions:
 env:
   PLAN_BUCKET: plan-bucket-aa
   DESTROY_SUBPATH: destroy
-  TF_IN_AUTOMATION: "true"
 
 jobs:
   # -------------------------------
@@ -45,8 +44,8 @@ jobs:
 
       - name: Install Terraform
         run: |
-          curl -sSL -o tf.zip "https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip"
-          unzip -q tf.zip
+          curl -sSL -O "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
+          unzip -q terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
           terraform -version
 
@@ -57,7 +56,7 @@ jobs:
         run: terraform validate
 
       - name: Terraform Plan
-        # project_id is also in terraform.tfvars, but we pass it explicitly to match your sample
+        # project_id is in tfvars too; passing here mirrors the reference workflow
         run: terraform plan -input=false -var="project_id=${{ secrets.GCP_PROJECT_ID }}" -out=plan.tfplan
 
       - name: Checksum plan
@@ -93,8 +92,8 @@ jobs:
 
       - name: Install Terraform
         run: |
-          curl -sSL -o tf.zip "https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip"
-          unzip -q tf.zip
+          curl -sSL -O "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
+          unzip -q terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
 
       - name: Set Prefix
@@ -145,8 +144,8 @@ jobs:
 
       - name: Install Terraform
         run: |
-          curl -sSL -o tf.zip "https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip"
-          unzip -q tf.zip
+          curl -sSL -O "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
+          unzip -q terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
 
       - name: Terraform Init
@@ -186,8 +185,8 @@ jobs:
 
       - name: Install Terraform
         run: |
-          curl -sSL -o tf.zip "https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip"
-          unzip -q tf.zip
+          curl -sSL -O "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
+          unzip -q terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
 
       - name: Download Destroy Plan
