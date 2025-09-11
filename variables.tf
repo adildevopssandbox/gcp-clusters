@@ -14,6 +14,7 @@ variable "zone" {
 
 variable "backend_bucket" {
   type = string
+  default = ""
 }
 
 variable "cluster_name" {
