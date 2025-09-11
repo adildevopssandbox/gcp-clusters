@@ -13,7 +13,7 @@ variable "zone" {
 }
 
 variable "backend_bucket" {
-  type = string
+  type    = string
   default = ""
 }
 
@@ -54,5 +54,6 @@ variable "node_count" {
 
 # gke admin
 variable "admin_user_email" {
-  type = string
+  type    = string
+  default = ""
 }
