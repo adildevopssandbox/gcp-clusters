@@ -2,21 +2,17 @@ name: tf-multistage
 
 on:
   push:
-    branches: [ main ]     # auto plan on pushes to main
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       action:
-        description: "Stage to run manually"
+        description: "Which stage to run manually?"
         required: true
         type: choice
         default: apply
         options:
           - apply
           - destroy-apply
-      plan_sha:
-        description: "Commit SHA whose plan/destroy-plan to use (default: current SHA)"
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -24,17 +20,15 @@ permissions:
 env:
   PLAN_BUCKET: plan-bucket-aa
   DESTROY_SUBPATH: destroy
-  TF_IN_AUTOMATION: "true"
 
 jobs:
-  # --------------------------------
-  # PLAN (auto on push)
-  # --------------------------------
+  # PLAN (auto on push)---------------------------
   plan:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
@@ -48,8 +42,8 @@ jobs:
 
       - name: Install Terraform
         run: |
-          curl -sSL -O "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
-          unzip -q terraform_1.13.1_linux_amd64.zip
+          curl -LO "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
+          unzip terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
           terraform -version
 
@@ -68,18 +62,20 @@ jobs:
       - name: Upload plan to GCS
         run: |
           SAFE_PREFIX="${{ github.repository }}-${{ github.sha }}"
-          echo "SAFE_PREFIX=${SAFE_PREFIX}"
           gsutil cp plan.tfplan gs://${PLAN_BUCKET}/${SAFE_PREFIX}/plan.tfplan
           gsutil cp plan.tfplan.sha256 gs://${PLAN_BUCKET}/${SAFE_PREFIX}/plan.tfplan.sha256
 
-  # --------------------------------
-  # APPLY (manual)
-  # --------------------------------
+  # -------------------------------
+  # APPLY (manual via workflow_dispatch)
+  # -------------------------------
   apply:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply'
     runs-on: ubuntu-latest
+    outputs:
+      safe_prefix: ${{ steps.set_prefix.outputs.safe_prefix }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
@@ -93,21 +89,17 @@ jobs:
 
       - name: Install Terraform
         run: |
-          curl -sSL -O "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
-          unzip -q terraform_1.13.1_linux_amd64.zip
+          curl -LO "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
+          unzip terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
 
-      - name: Resolve SAFE_PREFIX (which plan to apply)
-        id: prefix
-        run: |
-          SHA="${{ github.event.inputs.plan_sha }}"
-          if [ -z "$SHA" ]; then SHA="${{ github.sha }}"; fi
-          echo "safe_prefix=${{ github.repository }}-${SHA}" >> $GITHUB_OUTPUT
-          echo "Using plan from SHA=$SHA"
+      - name: Set Prefix
+        id: set_prefix
+        run: echo "safe_prefix=${{ github.repository }}-${{ github.sha }}" >> $GITHUB_OUTPUT
 
       - name: Download plan from GCS
         run: |
-          SAFE_PREFIX="${{ steps.prefix.outputs.safe_prefix }}"
+          SAFE_PREFIX="${{ github.repository }}-${{ github.sha }}"
           gsutil cp gs://${PLAN_BUCKET}/${SAFE_PREFIX}/plan.tfplan ./plan.tfplan
           gsutil cp gs://${PLAN_BUCKET}/${SAFE_PREFIX}/plan.tfplan.sha256 ./plan.tfplan.sha256
 
@@ -115,7 +107,10 @@ jobs:
         run: |
           DOWN_HASH="$(sha256sum plan.tfplan | awk '{print $1}')"
           EXP_HASH="$(cat plan.tfplan.sha256)"
-          test "$DOWN_HASH" = "$EXP_HASH" || { echo "Checksum mismatch! expected=$EXP_HASH got=$DOWN_HASH"; exit 1; }
+          if [ "$DOWN_HASH" != "$EXP_HASH" ]; then
+            echo "Checksum mismatch! expected=$EXP_HASH got=$DOWN_HASH"
+            exit 1
+          fi
 
       - name: Terraform Init
         run: terraform init -input=false
@@ -123,15 +118,16 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -input=false plan.tfplan
 
-  # --------------------------------
-  # DESTROY-PLAN (auto after apply)
-  # --------------------------------
+  # -------------------------------
+  # DESTROY PLAN (auto after apply)
+  # -------------------------------
   destroy-plan:
+    runs-on: ubuntu-latest
     needs: apply
     if: needs.apply.result == 'success'
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
@@ -145,8 +141,8 @@ jobs:
 
       - name: Install Terraform
         run: |
-          curl -sSL -O "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
-          unzip -q terraform_1.13.1_linux_amd64.zip
+          curl -LO "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
+          unzip terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
 
       - name: Terraform Init
@@ -161,19 +157,18 @@ jobs:
       - name: Upload Destroy Plan
         run: |
           SAFE_PREFIX="${{ github.repository }}-${{ github.sha }}"
-          echo "SAFE_PREFIX=${SAFE_PREFIX}"
           gsutil cp destroy.tfplan gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan
           gsutil cp destroy.tfplan.sha256 gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan.sha256
 
-  # --------------------------------
-  # DESTROY-APPLY (manual approval)
-  # --------------------------------
+  # -------------------------------
+  # DESTROY APPLY (manual via workflow_dispatch)
+  # -------------------------------
   destroy-apply:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy-apply'
     runs-on: ubuntu-latest
-    environment: destroy-approval   # set this env in repo settings with required reviewers
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
@@ -187,21 +182,13 @@ jobs:
 
       - name: Install Terraform
         run: |
-          curl -sSL -O "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
-          unzip -q terraform_1.13.1_linux_amd64.zip
+          curl -LO "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
+          unzip terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
-
-      - name: Resolve SAFE_PREFIX (which destroy plan to use)
-        id: prefix
-        run: |
-          SHA="${{ github.event.inputs.plan_sha }}"
-          if [ -z "$SHA" ]; then SHA="${{ github.sha }}"; fi
-          echo "safe_prefix=${{ github.repository }}-${SHA}" >> $GITHUB_OUTPUT
-          echo "Using destroy plan from SHA=$SHA"
 
       - name: Download Destroy Plan
         run: |
-          SAFE_PREFIX="${{ steps.prefix.outputs.safe_prefix }}"
+          SAFE_PREFIX="${{ github.repository }}-${{ github.sha }}"
           gsutil cp gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan ./destroy.tfplan
           gsutil cp gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan.sha256 ./destroy.tfplan.sha256
 
@@ -209,7 +196,10 @@ jobs:
         run: |
           DOWN_HASH="$(sha256sum destroy.tfplan | awk '{print $1}')"
           EXP_HASH="$(cat destroy.tfplan.sha256)"
-          test "$DOWN_HASH" = "$EXP_HASH" || { echo "Checksum mismatch! expected=$EXP_HASH got=$DOWN_HASH"; exit 1; }
+          if [ "$DOWN_HASH" != "$EXP_HASH" ]; then
+            echo "Checksum mismatch! expected=$EXP_HASH got=$DOWN_HASH"
+            exit 1
+          fi
 
       - name: Terraform Init
         run: terraform init -input=false
