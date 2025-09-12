@@ -3,13 +3,13 @@ name: tf-multistage
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: {}  # allow manual re-runs of the whole pipeline
+  workflow_dispatch: {}  # allows for manual re-runs of the whole pipeline
 
 permissions:
   contents: read
 
 env:
-  PLAN_BUCKET: plan-bucket-zaf-gcp
+  PLAN_BUCKET: plan-bucket-aa
   DESTROY_SUBPATH: destroy
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GOOGLE_PROJECT_ID }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Install Terraform 1.13.1
         run: |
@@ -79,7 +79,7 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GOOGLE_PROJECT_ID }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Install Terraform 1.13.1
         run: |
