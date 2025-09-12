@@ -36,6 +36,7 @@ resource "google_container_cluster" "cluster1" {
   location   = var.zone
   network    = google_compute_network.vpc1.id
   subnetwork = google_compute_subnetwork.subnet1.name
+  deletion_protection = var.deletion_protection
 
   ip_allocation_policy {
     cluster_secondary_range_name  = "pods1"

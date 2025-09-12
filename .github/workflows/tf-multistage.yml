@@ -163,7 +163,7 @@ jobs:
   destroy-apply:
     needs: [destroy-plan]
     runs-on: ubuntu-latest
-    environment: destroy-apply   # <-- second approval gate
+    environment: destroy-apply   # second approval gate
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -57,3 +57,9 @@ variable "admin_user_email" {
   type    = string
   default = ""
 }
+
+# cluster deletion protection
+variable "deletion_protection" {
+  type    = bool
+  default = false
+}
