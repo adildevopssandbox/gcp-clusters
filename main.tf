@@ -40,7 +40,6 @@ resource "google_service_account" "nodesa1" {
 resource "google_project_iam_member" "noderole_service_account" {
   project = var.project_id
   role    = "roles/container.nodeServiceAccount"
-  member  = "serviceAccount:${google_service_account.nodesa1.email}"
 }
 
 resource "google_project_iam_member" "noderole_logging" {
