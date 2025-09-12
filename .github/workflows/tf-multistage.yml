@@ -3,29 +3,21 @@ name: tf-multistage
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
-    inputs:
-      action:
-        description: "Which stage to run manually?"
-        required: true
-        type: choice
-        default: apply
-        options:
-          - apply
-          - destroy-apply
+  workflow_dispatch: {}  # allow manual re-runs of the whole pipeline
 
 permissions:
   contents: read
 
 env:
-  PLAN_BUCKET: plan-bucket-aa
+  PLAN_BUCKET: plan-bucket-zaf-gcp
   DESTROY_SUBPATH: destroy
 
 jobs:
-  # PLAN (auto on push)---------------------------
+  # -------------------------------------------------
+  # 1) PLAN (auto)
+  # -------------------------------------------------
   plan:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,10 +30,11 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          project_id: ${{ secrets.GOOGLE_PROJECT_ID }}
 
-      - name: Install Terraform
+      - name: Install Terraform 1.13.1
         run: |
+          sudo apt-get update && sudo apt-get install -y unzip
           curl -LO "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
           unzip terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
@@ -65,12 +58,13 @@ jobs:
           gsutil cp plan.tfplan gs://${PLAN_BUCKET}/${SAFE_PREFIX}/plan.tfplan
           gsutil cp plan.tfplan.sha256 gs://${PLAN_BUCKET}/${SAFE_PREFIX}/plan.tfplan.sha256
 
-  # -------------------------------
-  # APPLY (manual via workflow_dispatch)
-  # -------------------------------
+  # -------------------------------------------------
+  # 2) APPLY (waits for your approval in this same run)
+  # -------------------------------------------------
   apply:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply'
+    needs: [plan]
     runs-on: ubuntu-latest
+    environment: apply   # <-- creates the approval gate
     outputs:
       safe_prefix: ${{ steps.set_prefix.outputs.safe_prefix }}
     steps:
@@ -85,13 +79,15 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          project_id: ${{ secrets.GOOGLE_PROJECT_ID }}
 
-      - name: Install Terraform
+      - name: Install Terraform 1.13.1
         run: |
+          sudo apt-get update && sudo apt-get install -y unzip
           curl -LO "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
           unzip terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
+          terraform -version
 
       - name: Set Prefix
         id: set_prefix
@@ -118,13 +114,12 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -input=false plan.tfplan
 
-  # -------------------------------
-  # DESTROY PLAN (auto after apply)
-  # -------------------------------
+  # -------------------------------------------------
+  # 3) DESTROY PLAN (auto after apply)
+  # -------------------------------------------------
   destroy-plan:
+    needs: [apply]
     runs-on: ubuntu-latest
-    needs: apply
-    if: needs.apply.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -139,11 +134,13 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Install Terraform
+      - name: Install Terraform 1.13.1
         run: |
+          sudo apt-get update && sudo apt-get install -y unzip
           curl -LO "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
           unzip terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
+          terraform -version
 
       - name: Terraform Init
         run: terraform init -input=false
@@ -160,12 +157,13 @@ jobs:
           gsutil cp destroy.tfplan gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan
           gsutil cp destroy.tfplan.sha256 gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan.sha256
 
-  # -------------------------------
-  # DESTROY APPLY (manual via workflow_dispatch)
-  # -------------------------------
+  # -------------------------------------------------
+  # 4) DESTROY APPLY (waits for your approval in SAME RUN)
+  # -------------------------------------------------
   destroy-apply:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy-apply'
+    needs: [destroy-plan]
     runs-on: ubuntu-latest
+    environment: destroy-apply   # <-- second approval gate
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -180,11 +178,13 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Install Terraform
+      - name: Install Terraform 1.13.1
         run: |
+          sudo apt-get update && sudo apt-get install -y unzip
           curl -LO "https://releases.hashicorp.com/terraform/1.13.1/terraform_1.13.1_linux_amd64.zip"
           unzip terraform_1.13.1_linux_amd64.zip
           sudo mv terraform /usr/local/bin/
+          terraform -version
 
       - name: Download Destroy Plan
         run: |
@@ -192,17 +192,16 @@ jobs:
           gsutil cp gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan ./destroy.tfplan
           gsutil cp gs://${PLAN_BUCKET}/${SAFE_PREFIX}/${DESTROY_SUBPATH}/destroy.tfplan.sha256 ./destroy.tfplan.sha256
 
-      - name: Verify checksum
+      - name: Verify destroy plan checksum
         run: |
           DOWN_HASH="$(sha256sum destroy.tfplan | awk '{print $1}')"
           EXP_HASH="$(cat destroy.tfplan.sha256)"
           if [ "$DOWN_HASH" != "$EXP_HASH" ]; then
-            echo "Checksum mismatch! expected=$EXP_HASH got=$DOWN_HASH"
-            exit 1
+            echo "Checksum mismatch! expected=$EXP_HASH got=$DOWN_HASH"; exit 1
           fi
 
       - name: Terraform Init
         run: terraform init -input=false
 
-      - name: Terraform Destroy Apply
+      - name: Terraform Destroy Apply (from plan)
         run: terraform apply -input=false destroy.tfplan
