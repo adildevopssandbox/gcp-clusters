@@ -26,32 +26,9 @@ resource "google_compute_subnetwork" "subnet2" {
   ip_cidr_range = var.subnet2_cidr
 }
 
-resource "google_project_iam_member" "clusterrole1" {
-  project = var.project_id
-  role    = "roles/container.admin"
-  member  = "user:${var.admin_user_email}"
-}
-
 resource "google_service_account" "nodesa1" {
   account_id   = "nodesa1"
   display_name = "nodesa1"
-}
-
-resource "google_project_iam_member" "noderole_service_account" {
-  project = var.project_id
-  role    = "roles/container.nodeServiceAccount"
-}
-
-resource "google_project_iam_member" "noderole_logging" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.nodesa1.email}"
-}
-
-resource "google_project_iam_member" "noderole_monitor" {
-  project = var.project_id
-  role    = "roles/monitoring.metricWriter"
-  member  = "serviceAccount:${google_service_account.nodesa1.email}"
 }
 
 resource "google_container_cluster" "cluster1" {
@@ -89,7 +66,6 @@ resource "google_container_node_pool" "nodepool1" {
 
   depends_on = [
     google_container_cluster.cluster1,
-    google_project_iam_member.noderole_service_account
   ]
 }
 
